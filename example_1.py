@@ -98,6 +98,7 @@ class OfflineTableExtractorPipeline:
                 continue
 
             print(f"\n--- Processing Page {page_num + 1} ---")
+            page_table_counter = 0
 
             for img_idx, scanned_image_obj in enumerate(page.images):
                 try:
@@ -246,7 +247,14 @@ class OfflineTableExtractorPipeline:
                     # Create final presentation Pandas Dataframe container
                     df = pd.DataFrame(matrix_grid)
                     df = self._promote_header(df, enabled=promote_header)
-                    all_extracted_tables.append(df)
+                    page_table_counter += 1
+                    all_extracted_tables.append(
+                        {
+                            "page": page_num + 1,
+                            "table_on_page": page_table_counter,
+                            "dataframe": df,
+                        }
+                    )
 
         return all_extracted_tables
 
@@ -287,6 +295,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable first-row-to-header promotion heuristic.",
     )
+    parser.add_argument(
+        "--output-xlsx",
+        default="extracted_tables.xlsx",
+        help="Output Excel workbook path (one table per sheet).",
+    )
     args = parser.parse_args()
 
     # Spin up execution instance
@@ -298,9 +311,24 @@ if __name__ == "__main__":
         promote_header=not args.no_promote_header,
     )
 
+    if results:
+        with pd.ExcelWriter(args.output_xlsx) as writer:
+            for item in results:
+                sheet_name = f"page_{item['page']}_table_{item['table_on_page']}"
+                # Excel sheet names are limited to 31 characters.
+                sheet_name = sheet_name[:31]
+                item["dataframe"].to_excel(writer, sheet_name=sheet_name, index=False)
+        print(f"Saved {len(results)} table(s) to Excel file: {args.output_xlsx}")
+    else:
+        print("No tables were extracted; no Excel file was created.")
+
     # Render final console spreadsheet printouts
-    for index, df in enumerate(results):
+    for index, item in enumerate(results):
+        df = item["dataframe"]
         print("\n==============================================")
-        print(f"FINAL PASSED DATAFRAME BLOCK #{index + 1}")
+        print(
+            f"FINAL PASSED DATAFRAME BLOCK #{index + 1} "
+            f"(page={item['page']}, table={item['table_on_page']})"
+        )
         print("==============================================")
         print(df.to_string())
