@@ -1,6 +1,7 @@
 import io
 import os
 import argparse
+from pathlib import Path
 import torch
 import numpy as np
 import pandas as pd
@@ -9,10 +10,21 @@ from transformers import AutoImageProcessor, AutoModelForObjectDetection
 from PIL import Image
 import easyocr
 
+
+DEFAULT_MODEL_BASE_DIR = Path(__file__).resolve().parent / "local_models"
+DEFAULT_DETECT_MODEL_DIR = DEFAULT_MODEL_BASE_DIR / "table_transformer_detection_local"
+DEFAULT_STRUCT_MODEL_DIR = DEFAULT_MODEL_BASE_DIR / "table_transformer_structure_local"
+DEFAULT_EASYOCR_MODEL_DIR = DEFAULT_MODEL_BASE_DIR / "easyocr"
+
 class OfflineTableExtractorPipeline:
-    def __init__(self, detect_model_path, structure_model_path):
+    def __init__(self, detect_model_path, structure_model_path, ocr_model_path):
         print("[1/4] Initializing local EasyOCR framework...")
-        self.ocr_reader = easyocr.Reader(['en'], gpu=False)
+        self.ocr_reader = easyocr.Reader(
+            ['en'],
+            gpu=False,
+            model_storage_directory=str(ocr_model_path),
+            download_enabled=False,
+        )
         
         print("[2/4] Loading Stage 1: Table Detection Model...")
         self.detect_processor = AutoImageProcessor.from_pretrained(detect_model_path, local_files_only=True)
@@ -265,18 +277,23 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--detect-model-dir",
-        default="C:\\Models\\table_transformer_detection_local",
+        default=str(DEFAULT_DETECT_MODEL_DIR),
         help="Local directory for the table detection model.",
     )
     parser.add_argument(
         "--struct-model-dir",
-        default="C:\\Models\\table_transformer_structure_local",
+        default=str(DEFAULT_STRUCT_MODEL_DIR),
         help="Local directory for the table structure model.",
     )
     parser.add_argument(
         "--pdf-path",
         default="C:\\Users\\YourUsername\\Documents\\scanned_invoice.pdf",
         help="Path to the target input PDF.",
+    )
+    parser.add_argument(
+        "--ocr-model-dir",
+        default=str(DEFAULT_EASYOCR_MODEL_DIR),
+        help="Local directory containing EasyOCR model weights.",
     )
     parser.add_argument(
         "--table-threshold",
@@ -303,7 +320,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Spin up execution instance
-    pipeline = OfflineTableExtractorPipeline(args.detect_model_dir, args.struct_model_dir)
+    pipeline = OfflineTableExtractorPipeline(
+        args.detect_model_dir,
+        args.struct_model_dir,
+        args.ocr_model_dir,
+    )
     results = pipeline.extract_tables_from_pdf(
         args.pdf_path,
         table_threshold=args.table_threshold,
