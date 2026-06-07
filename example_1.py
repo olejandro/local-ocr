@@ -287,7 +287,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--pdf-path",
-        default="C:\\Users\\YourUsername\\Documents\\scanned_invoice.pdf",
+        required=True,
         help="Path to the target input PDF.",
     )
     parser.add_argument(

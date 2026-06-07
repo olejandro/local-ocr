@@ -7,7 +7,9 @@ Extracts tables from image-based PDFs into one Excel workbook with one table per
 - `model_bootstrap.py`: downloads and stores required models locally.
 - `example_1.py`: runs table detection, structure detection, OCR, and writes Excel output.
 
-## 1) One-time model bootstrap (online)
+## Usage
+
+### One-time model bootstrap (online)
 
 ```powershell
 python model_bootstrap.py
@@ -19,7 +21,7 @@ This populates `local_models/` with:
 - Table Transformer structure model
 - EasyOCR model files
 
-## 2) Run extraction (offline)
+### Run extraction (offline)
 
 ```powershell
 python example_1.py --pdf-path "C:\path\to\input.pdf" --output-xlsx "C:\path\to\tables.xlsx"
@@ -31,7 +33,7 @@ Output behavior:
 - One extracted table per sheet.
 - Sheet names are `page_<N>_table_<M>`.
 
-## Optional flags
+### Optional flags
 
 - `--table-threshold` (default: `0.6`)
 - `--cell-threshold` (default: `0.6`)

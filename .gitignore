@@ -4,3 +4,5 @@
 *.zip
 # ignore any folder starting with "local"
 local_models/
+# ignore any pdf files
+*.pdf
