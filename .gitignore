@@ -1,0 +1,6 @@
+# ignore virtual environment
+.venv/
+# ignore any zip files
+*.zip
+# ignore any folder starting with "local"
+local*/
