@@ -39,13 +39,13 @@ class _FakePdfReader:
         self.pages = list(type(self).pages)
 
 
-class _NoOpCallable:
+class _FakeModelFactory:
     @staticmethod
     def from_pretrained(*_, **__):
         return object()
 
 
-class _FakeVisionEncoderDecoderModel(_NoOpCallable):
+class _FakeVisionEncoderDecoderModel(_FakeModelFactory):
     def eval(self):
         return None
 
@@ -103,17 +103,15 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         fake_numpy = types.ModuleType("numpy")
-        fake_numpy.median = lambda values: (
-            lambda sorted_values: (
-                sorted_values[len(sorted_values) // 2]
-                if len(sorted_values) % 2 == 1
-                else (
-                    sorted_values[len(sorted_values) // 2 - 1]
-                    + sorted_values[len(sorted_values) // 2]
-                )
-                / 2
-            )
-        )(sorted(values))
+
+        def _median(values):
+            sorted_values = sorted(values)
+            middle = len(sorted_values) // 2
+            if len(sorted_values) % 2 == 1:
+                return sorted_values[middle]
+            return (sorted_values[middle - 1] + sorted_values[middle]) / 2
+
+        fake_numpy.median = _median
         fake_numpy.mean = lambda values: sum(values) / len(values)
 
         fake_pandas = types.ModuleType("pandas")
@@ -123,9 +121,9 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         fake_pypdf.PdfReader = _FakePdfReader
 
         fake_transformers = types.ModuleType("transformers")
-        fake_transformers.AutoImageProcessor = _NoOpCallable
-        fake_transformers.AutoModelForObjectDetection = _NoOpCallable
-        fake_transformers.TrOCRProcessor = _NoOpCallable
+        fake_transformers.AutoImageProcessor = _FakeModelFactory
+        fake_transformers.AutoModelForObjectDetection = _FakeModelFactory
+        fake_transformers.TrOCRProcessor = _FakeModelFactory
         fake_transformers.VisionEncoderDecoderModel = _FakeVisionEncoderDecoderModel
 
         fake_pil = types.ModuleType("PIL")
@@ -151,7 +149,7 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
     def tearDownClass(cls):
         cls._module_patcher.stop()
 
-    def _pipeline(self):
+    def _create_test_pipeline(self):
         pipeline = object.__new__(self.example_1.OfflineTableExtractorPipeline)
         pipeline.detect_processor = _FakeProcessor({"labels": [], "boxes": []})
         pipeline.detect_model = lambda **_: {}
@@ -162,7 +160,7 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
 
     def test_extract_tables_returns_empty_when_pages_have_no_images(self):
         _FakePdfReader.pages = [_FakePage(images=[])]
-        pipeline = self._pipeline()
+        pipeline = self._create_test_pipeline()
 
         with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
             results = pipeline.extract_tables_from_pdf(f.name)
@@ -171,7 +169,7 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
 
     def test_extract_tables_skips_corrupt_page_images(self):
         _FakePdfReader.pages = [_FakePage(images=[_FakeEmbeddedImage(data=b"broken")])]
-        pipeline = self._pipeline()
+        pipeline = self._create_test_pipeline()
 
         with (
             tempfile.NamedTemporaryFile(suffix=".pdf") as f,
@@ -187,7 +185,7 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
 
     def test_extract_tables_builds_matrix_from_detected_cells(self):
         _FakePdfReader.pages = [_FakePage(images=[_FakeEmbeddedImage(data=b"ok")])]
-        pipeline = self._pipeline()
+        pipeline = self._create_test_pipeline()
         pipeline.detect_processor = _FakeProcessor(
             {
                 "labels": [_TensorScalar(0)],
