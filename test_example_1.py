@@ -103,7 +103,17 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         fake_numpy = types.ModuleType("numpy")
-        fake_numpy.median = lambda values: sorted(values)[len(values) // 2]
+        fake_numpy.median = lambda values: (
+            lambda sorted_values: (
+                sorted_values[len(sorted_values) // 2]
+                if len(sorted_values) % 2 == 1
+                else (
+                    sorted_values[len(sorted_values) // 2 - 1]
+                    + sorted_values[len(sorted_values) // 2]
+                )
+                / 2
+            )
+        )(sorted(values))
         fake_numpy.mean = lambda values: sum(values) / len(values)
 
         fake_pandas = types.ModuleType("pandas")
@@ -201,8 +211,7 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
             }
         )
 
-        values = iter(["A1", "B1", "A2", "B2"])
-        pipeline._ocr_cell_text = lambda _img: next(values)
+        pipeline._ocr_cell_text = mock.Mock(side_effect=["A1", "B1", "A2", "B2"])
 
         with (
             tempfile.NamedTemporaryFile(suffix=".pdf") as f,
