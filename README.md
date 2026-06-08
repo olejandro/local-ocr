@@ -5,7 +5,7 @@ Extracts tables from image-based PDFs into one Excel workbook with one table per
 ## What this project includes
 
 - `model_bootstrap.py`: downloads and stores required models locally.
-- `example_1.py`: runs table detection, structure detection, OCR, and writes Excel output.
+- `example_1.py`: runs table detection, structure detection, TrOCR, and writes Excel output.
 
 ## Usage
 
@@ -19,7 +19,7 @@ This populates `local_models/` with:
 
 - Table Transformer detection model
 - Table Transformer structure model
-- EasyOCR model files
+- TrOCR model files
 
 ### Run extraction (offline)
 

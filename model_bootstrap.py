@@ -1,17 +1,17 @@
 import argparse
 from pathlib import Path
+from typing import Any
 
-import easyocr
-from transformers import AutoImageProcessor, AutoModelForObjectDetection
+from transformers import AutoImageProcessor, AutoModelForObjectDetection, TrOCRProcessor, VisionEncoderDecoderModel
 
 
 DEFAULT_MODEL_BASE_DIR = Path(__file__).resolve().parent / "local_models"
-DEFAULT_EASYOCR_MODEL_DIR = DEFAULT_MODEL_BASE_DIR / "easyocr"
 
 
 REQUIRED_MODELS = {
 	"detection": "microsoft/table-transformer-detection",
 	"structure": "microsoft/table-transformer-structure-recognition-v1.1-all",
+	"ocr": "microsoft/trocr-base-printed",
 }
 
 
@@ -21,7 +21,7 @@ def _is_model_present(model_dir: Path) -> bool:
 	return model_dir.exists() and all((model_dir / file_name).exists() for file_name in required_files)
 
 
-def _ensure_model_local(model_id: str, model_dir: Path) -> None:
+def _ensure_model_local(model_id: str, model_dir: Path, processor_cls: Any, model_cls: Any) -> None:
 	if _is_model_present(model_dir):
 		print(f"[skip] {model_id} already present at {model_dir}")
 		return
@@ -29,37 +29,40 @@ def _ensure_model_local(model_id: str, model_dir: Path) -> None:
 	print(f"[download] Pulling {model_id} into {model_dir} ...")
 	model_dir.mkdir(parents=True, exist_ok=True)
 
-	processor = AutoImageProcessor.from_pretrained(model_id)
-	model = AutoModelForObjectDetection.from_pretrained(model_id)
+	processor = processor_cls.from_pretrained(model_id)
+	model = model_cls.from_pretrained(model_id)
 
 	processor.save_pretrained(model_dir)
 	model.save_pretrained(model_dir)
 	print(f"[ok] Saved {model_id} to {model_dir}")
 
 
-def ensure_required_models(base_dir: Path) -> tuple[Path, Path]:
-	"""Ensure both models used by example_1.py exist locally under base_dir."""
+def ensure_required_models(base_dir: Path) -> tuple[Path, Path, Path]:
+	"""Ensure detection, structure, and OCR models exist locally under base_dir."""
 	detect_dir = base_dir / "table_transformer_detection_local"
 	struct_dir = base_dir / "table_transformer_structure_local"
+	ocr_dir = base_dir / "trocr_base_printed_local"
 
-	_ensure_model_local(REQUIRED_MODELS["detection"], detect_dir)
-	_ensure_model_local(REQUIRED_MODELS["structure"], struct_dir)
-
-	return detect_dir, struct_dir
-
-
-def ensure_easyocr_models(model_dir: Path) -> Path:
-	"""Pre-download EasyOCR weights into a project-local directory for offline runtime."""
-	model_dir.mkdir(parents=True, exist_ok=True)
-	print(f"[bootstrap] Ensuring EasyOCR models are present at {model_dir} ...")
-	easyocr.Reader(
-		["en"],
-		gpu=False,
-		model_storage_directory=str(model_dir),
-		download_enabled=True,
+	_ensure_model_local(
+		REQUIRED_MODELS["detection"],
+		detect_dir,
+		AutoImageProcessor,
+		AutoModelForObjectDetection,
 	)
-	print(f"[ok] EasyOCR models ready at {model_dir}")
-	return model_dir
+	_ensure_model_local(
+		REQUIRED_MODELS["structure"],
+		struct_dir,
+		AutoImageProcessor,
+		AutoModelForObjectDetection,
+	)
+	_ensure_model_local(
+		REQUIRED_MODELS["ocr"],
+		ocr_dir,
+		TrOCRProcessor,
+		VisionEncoderDecoderModel,
+	)
+
+	return detect_dir, struct_dir, ocr_dir
 
 
 def main() -> None:
@@ -74,8 +77,7 @@ def main() -> None:
 	args = parser.parse_args()
 
 	base_dir = Path(args.base_dir).resolve()
-	detect_dir, struct_dir = ensure_required_models(base_dir)
-	ocr_dir = ensure_easyocr_models(base_dir / DEFAULT_EASYOCR_MODEL_DIR.name)
+	detect_dir, struct_dir, ocr_dir = ensure_required_models(base_dir)
 
 	print("\nReady to use these paths with example_1.py:")
 	print(f"--detect-model-dir \"{detect_dir}\"")
