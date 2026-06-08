@@ -33,10 +33,8 @@ class _FakeImageModule(types.ModuleType):
 
 
 class _FakePdfReader:
-    pages = []
-
     def __init__(self, _):
-        self.pages = list(type(self).pages)
+        self.pages = []
 
 
 class _FakeModelFactory:
@@ -159,20 +157,32 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         return pipeline
 
     def test_extract_tables_returns_empty_when_pages_have_no_images(self):
-        _FakePdfReader.pages = [_FakePage(images=[])]
         pipeline = self._create_test_pipeline()
 
-        with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+        with (
+            tempfile.NamedTemporaryFile(suffix=".pdf") as f,
+            mock.patch.object(
+                self.example_1,
+                "PdfReader",
+                return_value=types.SimpleNamespace(pages=[_FakePage(images=[])]),
+            ),
+        ):
             results = pipeline.extract_tables_from_pdf(f.name)
 
         self.assertEqual(results, [])
 
     def test_extract_tables_skips_corrupt_page_images(self):
-        _FakePdfReader.pages = [_FakePage(images=[_FakeEmbeddedImage(data=b"broken")])]
         pipeline = self._create_test_pipeline()
 
         with (
             tempfile.NamedTemporaryFile(suffix=".pdf") as f,
+            mock.patch.object(
+                self.example_1,
+                "PdfReader",
+                return_value=types.SimpleNamespace(
+                    pages=[_FakePage(images=[_FakeEmbeddedImage(data=b"broken")])]
+                ),
+            ),
             mock.patch.object(
                 self.example_1,
                 "_open_rgb_image",
@@ -184,7 +194,6 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         self.assertEqual(results, [])
 
     def test_extract_tables_builds_matrix_from_detected_cells(self):
-        _FakePdfReader.pages = [_FakePage(images=[_FakeEmbeddedImage(data=b"ok")])]
         pipeline = self._create_test_pipeline()
         pipeline.detect_processor = _FakeProcessor(
             {
@@ -213,6 +222,13 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
 
         with (
             tempfile.NamedTemporaryFile(suffix=".pdf") as f,
+            mock.patch.object(
+                self.example_1,
+                "PdfReader",
+                return_value=types.SimpleNamespace(
+                    pages=[_FakePage(images=[_FakeEmbeddedImage(data=b"ok")])]
+                ),
+            ),
             mock.patch.object(self.example_1, "_open_rgb_image", return_value=_FakeImage()),
             mock.patch.object(self.example_1, "_crop_image", return_value=_FakeImage(width=100, height=50)),
         ):
