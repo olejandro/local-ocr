@@ -1,9 +1,11 @@
 import importlib
+import csv
 import sys
 import tempfile
 import types
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from unittest import mock
 
 
@@ -238,6 +240,51 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         self.assertEqual(results[0]["page"], 1)
         self.assertEqual(results[0]["table_on_page"], 1)
         self.assertEqual(results[0]["dataframe"].data, [["A1", "B1"], ["A2", "B2"]])
+
+
+class TT01PdfRegressionTests(unittest.TestCase):
+    def test_tt01_pdf_matches_expected_csv(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        pdf_path = repo_root / "tests" / "tt-01.pdf"
+        csv_path = repo_root / "tests" / "tt-01.csv"
+
+        if not pdf_path.exists():
+            self.skipTest("Missing tests/tt-01.pdf")
+
+        required_modules = ("torch", "numpy", "pandas", "pypdf", "transformers", "PIL")
+        missing_modules = [mod for mod in required_modules if importlib.util.find_spec(mod) is None]
+        if missing_modules:
+            self.skipTest(f"Missing required dependencies: {', '.join(missing_modules)}")
+
+        example_1 = importlib.import_module("example_1")
+        model_root = repo_root / "local_models"
+        detect_model_dir = model_root / "table_transformer_detection_local"
+        struct_model_dir = model_root / "table_transformer_structure_local"
+        ocr_model_dir = model_root / "trocr_base_printed_local"
+
+        missing_model_dirs = [
+            str(path.relative_to(repo_root))
+            for path in (detect_model_dir, struct_model_dir, ocr_model_dir)
+            if not path.exists()
+        ]
+        if missing_model_dirs:
+            self.skipTest(f"Missing local model directories: {', '.join(missing_model_dirs)}")
+
+        pipeline = example_1.OfflineTableExtractorPipeline(
+            detect_model_dir,
+            struct_model_dir,
+            ocr_model_dir,
+        )
+        results = pipeline.extract_tables_from_pdf(pdf_path, promote_header=False)
+
+        self.assertGreater(len(results), 0, "No tables were extracted from tests/tt-01.pdf")
+
+        dataframe = results[0]["dataframe"]
+        actual_rows = [[str(cell).strip() for cell in row] for row in dataframe.fillna("").values.tolist()]
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+            expected_rows = [[cell.strip() for cell in row] for row in csv.reader(f)]
+
+        self.assertEqual(actual_rows, expected_rows)
 
 
 if __name__ == "__main__":
