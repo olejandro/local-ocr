@@ -29,14 +29,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Set model cache directory
+        run: echo "MODEL_CACHE_DIR=$HOME/.cache/local-ocr-models" >> "$GITHUB_ENV"
+
       - name: Cache ML models
         uses: actions/cache@v4
         with:
-          path: ~/.cache/local-ocr-models
+          path: ${{ env.MODEL_CACHE_DIR }}
           key: local-ocr-models-v1
 
       - name: Run tests
         env:
           LOCAL_OCR_BOOTSTRAP_MODELS: "1"
-          LOCAL_OCR_MODEL_BASE_DIR: ~/.cache/local-ocr-models
+          LOCAL_OCR_MODEL_BASE_DIR: ${{ env.MODEL_CACHE_DIR }}
         run: python -m unittest discover -s tests -v
