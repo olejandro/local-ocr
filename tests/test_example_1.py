@@ -2,6 +2,7 @@ import importlib
 import importlib.util
 import csv
 import math
+import os
 import sys
 import tempfile
 import types
@@ -246,6 +247,9 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
 
 class TableExtractionRegressionTests(unittest.TestCase):
     _REQUIRED_DEPENDENCY_MODULES = ("torch", "numpy", "pandas", "pypdf", "transformers", "PIL")
+    _BOOTSTRAP_ENV = "LOCAL_OCR_BOOTSTRAP_MODELS"
+    _MODEL_BASE_DIR_ENV = "LOCAL_OCR_MODEL_BASE_DIR"
+    _TRUE_VALUES = {"1", "true", "yes", "on"}
 
     @staticmethod
     def _normalize_rows(rows):
@@ -284,6 +288,12 @@ class TableExtractionRegressionTests(unittest.TestCase):
                     f"Mismatch at row {row_index}, column {col_index}",
                 )
 
+    def _env_var_enabled(self, env_name):
+        value = os.environ.get(env_name)
+        if value is None:
+            return False
+        return value.strip().lower() in self._TRUE_VALUES
+
     def test_table_extraction_matches_expected_csv(self):
         repo_root = Path(__file__).resolve().parents[1]
         pdf_path = repo_root / "tests" / "tt-01.pdf"
@@ -304,16 +314,28 @@ class TableExtractionRegressionTests(unittest.TestCase):
             example_1 = importlib.import_module("example_1")
         except ImportError as ex:
             self.skipTest(f"Failed to import example_1: {ex}")
-        model_root = repo_root / "local_models"
-        detect_model_dir = model_root / "table_transformer_detection_local"
-        struct_model_dir = model_root / "table_transformer_structure_local"
-        ocr_model_dir = model_root / "trocr_base_printed_local"
+        model_root = Path(
+            os.environ.get(self._MODEL_BASE_DIR_ENV, str(repo_root / "local_models"))
+        ).resolve()
 
-        missing_model_dirs = [
-            str(path.relative_to(repo_root))
-            for path in (detect_model_dir, struct_model_dir, ocr_model_dir)
-            if not path.exists()
-        ]
+        if self._env_var_enabled(self._BOOTSTRAP_ENV):
+            # CI can opt in to model downloads by setting LOCAL_OCR_BOOTSTRAP_MODELS=1.
+            model_bootstrap = importlib.import_module("model_bootstrap")
+            detect_model_dir, struct_model_dir, ocr_model_dir = model_bootstrap.ensure_required_models(
+                model_root
+            )
+        else:
+            detect_model_dir = model_root / "table_transformer_detection_local"
+            struct_model_dir = model_root / "table_transformer_structure_local"
+            ocr_model_dir = model_root / "trocr_base_printed_local"
+
+        missing_model_dirs = []
+        for path in (detect_model_dir, struct_model_dir, ocr_model_dir):
+            if not path.exists():
+                try:
+                    missing_model_dirs.append(str(path.relative_to(repo_root)))
+                except ValueError:
+                    missing_model_dirs.append(str(path))
         if missing_model_dirs:
             self.skipTest(f"Missing local model directories: {', '.join(missing_model_dirs)}")
 
