@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Sequence, TypedDict, cast
 
 import torch
-import numpy as np
 import pandas as pd
 from pypdf import PdfReader
 from transformers import AutoImageProcessor, AutoModelForObjectDetection, TrOCRProcessor, VisionEncoderDecoderModel
@@ -16,16 +15,10 @@ DEFAULT_MODEL_BASE_DIR = Path(__file__).resolve().parent / "local_models"
 DEFAULT_DETECT_MODEL_DIR = DEFAULT_MODEL_BASE_DIR / "table_transformer_detection_local"
 DEFAULT_STRUCT_MODEL_DIR = DEFAULT_MODEL_BASE_DIR / "table_transformer_structure_local"
 DEFAULT_TROCR_MODEL_DIR = DEFAULT_MODEL_BASE_DIR / "trocr_base_printed_local"
+DEFAULT_TABLE_PROCESSOR_SIZE = {"shortest_edge": 800, "longest_edge": 800}
 
 
 ModelPath = str | os.PathLike[str]
-
-
-class DetectedCell(TypedDict):
-    x: float
-    y: float
-    text: str
-    height: float
 
 
 class ExtractedTable(TypedDict):
@@ -71,6 +64,10 @@ def _crop_image(image: Image.Image, box: Sequence[int]) -> Image.Image:
 def _image_size(image: Image.Image) -> tuple[int, int]:
     image_obj = cast(Any, image)
     return int(image_obj.width), int(image_obj.height)
+
+
+def _box_center(box: Sequence[int]) -> tuple[float, float]:
+    return (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
 
 
 def _processor_pixel_values(processor: TrOCRProcessor, image: Image.Image) -> torch.Tensor:
@@ -133,6 +130,16 @@ class OfflineTableExtractorPipeline:
         return [x0, y0, x1, y1]
 
     @staticmethod
+    def _intersect_boxes(first: Sequence[int], second: Sequence[int]) -> list[int] | None:
+        x0 = max(first[0], second[0])
+        y0 = max(first[1], second[1])
+        x1 = min(first[2], second[2])
+        y1 = min(first[3], second[3])
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return [x0, y0, x1, y1]
+
+    @staticmethod
     def _promote_header(df: pd.DataFrame, enabled: bool = True) -> pd.DataFrame:
         """Optionally promote first row to header only when it looks like a header."""
         if not enabled or df.empty or len(df) <= 1:
@@ -175,7 +182,7 @@ class OfflineTableExtractorPipeline:
         self,
         pdf_path: ModelPath,
         table_threshold: float = 0.6,
-        cell_threshold: float = 0.6,
+        cell_threshold: float = 0.3,
         promote_header: bool = True,
     ) -> list[ExtractedTable]:
         pdf_source = Path(pdf_path)
@@ -209,7 +216,11 @@ class OfflineTableExtractorPipeline:
                 # STAGE 1: LOCATE MACRO TABLES ON THE PAGE IMAGE
                 # ==========================================
                 try:
-                    detect_inputs = self.detect_processor(images=full_page_image, return_tensors="pt")
+                    detect_inputs = self.detect_processor(
+                        images=full_page_image,
+                        return_tensors="pt",
+                        size=DEFAULT_TABLE_PROCESSOR_SIZE,
+                    )
                     with torch.no_grad():
                         detect_outputs = self.detect_model(**detect_inputs)
                 except Exception as ex:
@@ -249,7 +260,11 @@ class OfflineTableExtractorPipeline:
                     # STAGE 2: PARSE THE INTERNAL TABLE CELLS
                     # ==========================================
                     try:
-                        struct_inputs = self.struct_processor(images=cropped_table_img, return_tensors="pt")
+                        struct_inputs = self.struct_processor(
+                            images=cropped_table_img,
+                            return_tensors="pt",
+                            size=DEFAULT_TABLE_PROCESSOR_SIZE,
+                        )
                         with torch.no_grad():
                             struct_outputs = self.struct_model(**struct_inputs)
                     except Exception as ex:
@@ -265,71 +280,44 @@ class OfflineTableExtractorPipeline:
                         struct_outputs, threshold=cell_threshold, target_sizes=struct_sizes
                     )[0]
 
-                    detected_cells: list[DetectedCell] = []
+                    row_boxes: list[list[int]] = []
+                    column_boxes: list[list[int]] = []
                     for label, box in zip(struct_results["labels"], struct_results["boxes"]):
-                        if label.item() != 4:  # Label 4 = Individual Table Cells
-                            continue
-
                         box_coords = self._clip_box(box.tolist(), c_width, c_height)
                         if box_coords is None:
                             continue
 
-                        # Compute geometric properties relative to cropped table window
-                        x_center = (box_coords[0] + box_coords[2]) / 2
-                        y_center = (box_coords[1] + box_coords[3]) / 2
-                        cell_height = box_coords[3] - box_coords[1]
+                        if label.item() == 1:  # table column
+                            column_boxes.append(box_coords)
+                        elif label.item() == 2:  # table row
+                            row_boxes.append(box_coords)
 
-                        # Isolate text elements inside cell via local TrOCR execution
-                        cell_crop = _crop_image(cropped_table_img, box_coords)
-                        try:
-                            cell_string = self._ocr_cell_text(cell_crop)
-                        except Exception as ex:
-                            print(
-                                f"      OCR failed for a cell in Table Block #{t_idx + 1} "
-                                f"({ex})."
-                            )
-                            cell_string = ""
-
-                        detected_cells.append(
-                            {
-                                "x": x_center,
-                                "y": y_center,
-                                "text": cell_string,
-                                "height": cell_height,
-                            }
-                        )
-
-                    if not detected_cells:
+                    if not row_boxes or not column_boxes:
                         continue
 
-                    # 3. Reconstruct extracted array into spatial table row assignments
-                    detected_cells.sort(key=lambda c: c["y"])
-                    median_height = np.median([c["height"] for c in detected_cells])
-                    y_tolerance = max(4.0, median_height * 0.45)
+                    row_boxes.sort(key=lambda box: _box_center(box)[1])
+                    column_boxes.sort(key=lambda box: _box_center(box)[0])
 
-                    rows: list[list[DetectedCell]] = []
-                    current_row = [detected_cells[0]]
-                    current_row_y = detected_cells[0]["y"]
-
-                    for cell in detected_cells[1:]:
-                        if abs(cell["y"] - current_row_y) <= y_tolerance:
-                            current_row.append(cell)
-                            current_row_y = float(np.mean([c["y"] for c in current_row]))
-                        else:
-                            current_row.sort(key=lambda c: c["x"])
-                            rows.append(current_row)
-                            current_row = [cell]
-                            current_row_y = cell["y"]
-                    current_row.sort(key=lambda c: c["x"])
-                    rows.append(current_row)
-
-                    # Normalize alignment array constraints into standard grid shapes
-                    max_cols = max(len(r) for r in rows)
+                    # 3. Reconstruct the grid from row/column intersections.
                     matrix_grid: list[list[str]] = []
-                    for r in rows:
-                        row_strings = [cell["text"] for cell in r]
-                        while len(row_strings) < max_cols:
-                            row_strings.append("")
+                    for row_box in row_boxes:
+                        row_strings: list[str] = []
+                        for column_box in column_boxes:
+                            cell_box = self._intersect_boxes(row_box, column_box)
+                            if cell_box is None:
+                                row_strings.append("")
+                                continue
+
+                            cell_crop = _crop_image(cropped_table_img, cell_box)
+                            try:
+                                cell_string = self._ocr_cell_text(cell_crop)
+                            except Exception as ex:
+                                print(
+                                    f"      OCR failed for a cell in Table Block #{t_idx + 1} "
+                                    f"({ex})."
+                                )
+                                cell_string = ""
+                            row_strings.append(cell_string)
                         matrix_grid.append(row_strings)
 
                     # Create final presentation Pandas Dataframe container
