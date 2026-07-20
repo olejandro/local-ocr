@@ -1,6 +1,7 @@
 import importlib
 import importlib.util
 import csv
+import math
 import sys
 import tempfile
 import types
@@ -250,7 +251,7 @@ class TT01PdfRegressionTests(unittest.TestCase):
         for row in rows:
             normalized_row = []
             for cell in row:
-                if cell is None or cell != cell:
+                if cell is None or (isinstance(cell, float) and math.isnan(cell)):
                     normalized_row.append("")
                 else:
                     normalized_row.append(str(cell).strip())
@@ -314,7 +315,7 @@ class TT01PdfRegressionTests(unittest.TestCase):
         dataframe_rows = dataframe.values.tolist()
         actual_rows = self._normalize_rows(dataframe_rows)
         with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-            expected_rows = self._normalize_rows(csv.reader(f))
+            expected_rows = self._normalize_rows(list(csv.reader(f)))
 
         self._assert_rows_equal(actual_rows, expected_rows)
 
