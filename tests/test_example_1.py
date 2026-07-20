@@ -245,6 +245,8 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
 
 
 class TT01PdfRegressionTests(unittest.TestCase):
+    REQUIRED_MODULES = ("torch", "numpy", "pandas", "pypdf", "transformers", "PIL")
+
     @staticmethod
     def _normalize_rows(rows):
         normalized_rows = []
@@ -283,8 +285,7 @@ class TT01PdfRegressionTests(unittest.TestCase):
         if not pdf_path.exists():
             self.skipTest("Missing tests/tt-01.pdf")
 
-        required_modules = ("torch", "numpy", "pandas", "pypdf", "transformers", "PIL")
-        missing_modules = [mod for mod in required_modules if importlib.util.find_spec(mod) is None]
+        missing_modules = [mod for mod in self.REQUIRED_MODULES if importlib.util.find_spec(mod) is None]
         if missing_modules:
             self.skipTest(f"Missing required dependencies: {', '.join(missing_modules)}")
 
