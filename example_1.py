@@ -35,15 +35,25 @@ class ExtractedTable(TypedDict):
 
 
 def _load_image_processor(model_path: ModelPath) -> Any:
-    processor = AutoImageProcessor.from_pretrained(model_path, local_files_only=True)  # type: ignore[reportUnknownMemberType]
-    # transformers < 4.37 does not accept a size dict with only 'longest_edge'.
-    # Normalise it to {'shortest_edge': 1, 'longest_edge': N} which is equivalent:
-    # the shortest-edge floor of 1 is never reached in practice, so the longest-edge
-    # cap is the only active constraint, preserving aspect ratio identically.
+    return AutoImageProcessor.from_pretrained(model_path, local_files_only=True)  # type: ignore[reportUnknownMemberType]
+
+
+def _processor_call(processor: Any, image: Image.Image) -> Any:
+    """Call an image processor, working around transformers < 4.37 not accepting
+    a size dict with only 'longest_edge'.  In newer transformers that format means
+    "scale so the longest edge equals N" (upscale or downscale).  We replicate
+    that behaviour explicitly and then tell the processor to skip its own resize."""
     size = getattr(processor, "size", None)
     if isinstance(size, dict) and "longest_edge" in size and "shortest_edge" not in size:
-        processor.size = {"shortest_edge": 1, "longest_edge": size["longest_edge"]}
-    return processor
+        longest_edge = size["longest_edge"]
+        img_w, img_h = image.size  # PIL: (width, height)
+        scale = longest_edge / max(img_w, img_h)
+        if scale != 1.0:
+            new_w = max(1, round(img_w * scale))
+            new_h = max(1, round(img_h * scale))
+            image = image.resize((new_w, new_h), Image.BILINEAR)
+        return processor(images=image, return_tensors="pt", do_resize=False)
+    return processor(images=image, return_tensors="pt")
 
 
 def _load_object_detection_model(model_path: ModelPath) -> Any:
@@ -217,7 +227,7 @@ class OfflineTableExtractorPipeline:
                 # STAGE 1: LOCATE MACRO TABLES ON THE PAGE IMAGE
                 # ==========================================
                 try:
-                    detect_inputs = self.detect_processor(images=full_page_image, return_tensors="pt")
+                    detect_inputs = _processor_call(self.detect_processor, full_page_image)
                     with torch.no_grad():
                         detect_outputs = self.detect_model(**detect_inputs)
                 except Exception as ex:
@@ -257,7 +267,7 @@ class OfflineTableExtractorPipeline:
                     # STAGE 2: PARSE THE INTERNAL TABLE CELLS
                     # ==========================================
                     try:
-                        struct_inputs = self.struct_processor(images=cropped_table_img, return_tensors="pt")
+                        struct_inputs = _processor_call(self.struct_processor, cropped_table_img)
                         with torch.no_grad():
                             struct_outputs = self.struct_model(**struct_inputs)
                     except Exception as ex:
