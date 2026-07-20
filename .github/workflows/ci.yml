@@ -25,7 +25,9 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install timm==0.9.2
 
       - name: Set model cache directory
         run: echo "MODEL_CACHE_DIR=$HOME/.cache/local-ocr-models" >> "$GITHUB_ENV"

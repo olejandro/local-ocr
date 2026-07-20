@@ -35,7 +35,15 @@ class ExtractedTable(TypedDict):
 
 
 def _load_image_processor(model_path: ModelPath) -> Any:
-    return AutoImageProcessor.from_pretrained(model_path, local_files_only=True)  # type: ignore[reportUnknownMemberType]
+    processor = AutoImageProcessor.from_pretrained(model_path, local_files_only=True)  # type: ignore[reportUnknownMemberType]
+    # transformers < 4.37 does not accept a size dict with only 'longest_edge'.
+    # Normalise it to {'shortest_edge': 1, 'longest_edge': N} which is equivalent:
+    # the shortest-edge floor of 1 is never reached in practice, so the longest-edge
+    # cap is the only active constraint, preserving aspect ratio identically.
+    size = getattr(processor, "size", None)
+    if isinstance(size, dict) and "longest_edge" in size and "shortest_edge" not in size:
+        processor.size = {"shortest_edge": 1, "longest_edge": size["longest_edge"]}
+    return processor
 
 
 def _load_object_detection_model(model_path: ModelPath) -> Any:
