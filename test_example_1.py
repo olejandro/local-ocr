@@ -125,6 +125,7 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         fake_transformers.VisionEncoderDecoderModel = _FakeVisionEncoderDecoderModel
 
         fake_pil = types.ModuleType("PIL")
+        fake_pil.__path__ = []
         fake_pil_image = _FakeImageModule("PIL.Image")
         fake_pil.Image = fake_pil_image
 
@@ -141,11 +142,13 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
             },
         )
         cls._module_patcher.start()
+        sys.modules.pop("example_1", None)
         cls.example_1 = importlib.import_module("example_1")
 
     @classmethod
     def tearDownClass(cls):
         cls._module_patcher.stop()
+        sys.modules.pop("example_1", None)
 
     def _create_test_pipeline(self):
         pipeline = object.__new__(self.example_1.OfflineTableExtractorPipeline)
