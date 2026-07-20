@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Sequence, TypedDict, cast
 
 import torch
-import numpy as np
 import pandas as pd
 from pypdf import PdfReader
 from transformers import AutoImageProcessor, AutoModelForObjectDetection, TrOCRProcessor, VisionEncoderDecoderModel
@@ -19,13 +18,6 @@ DEFAULT_TROCR_MODEL_DIR = DEFAULT_MODEL_BASE_DIR / "trocr_base_printed_local"
 
 
 ModelPath = str | os.PathLike[str]
-
-
-class DetectedCell(TypedDict):
-    x: float
-    y: float
-    text: str
-    height: float
 
 
 class ExtractedTable(TypedDict):
@@ -283,71 +275,51 @@ class OfflineTableExtractorPipeline:
                         struct_outputs, threshold=cell_threshold, target_sizes=struct_sizes
                     )[0]
 
-                    detected_cells: list[DetectedCell] = []
+                    # 3. Collect row (label 2) and column (label 1) boxes from the
+                    #    structure model.  Individual cells are the intersections of
+                    #    each row box with each column box.
+                    row_boxes: list[list[int]] = []
+                    col_boxes: list[list[int]] = []
                     for label, box in zip(struct_results["labels"], struct_results["boxes"]):
-                        if label.item() != 4:  # Label 4 = Individual Table Cells
-                            continue
+                        lv = label.item()
+                        if lv == 2:  # table row
+                            clipped = self._clip_box(box.tolist(), c_width, c_height)
+                            if clipped is not None:
+                                row_boxes.append(clipped)
+                        elif lv == 1:  # table column
+                            clipped = self._clip_box(box.tolist(), c_width, c_height)
+                            if clipped is not None:
+                                col_boxes.append(clipped)
 
-                        box_coords = self._clip_box(box.tolist(), c_width, c_height)
-                        if box_coords is None:
-                            continue
-
-                        # Compute geometric properties relative to cropped table window
-                        x_center = (box_coords[0] + box_coords[2]) / 2
-                        y_center = (box_coords[1] + box_coords[3]) / 2
-                        cell_height = box_coords[3] - box_coords[1]
-
-                        # Isolate text elements inside cell via local TrOCR execution
-                        cell_crop = _crop_image(cropped_table_img, box_coords)
-                        try:
-                            cell_string = self._ocr_cell_text(cell_crop)
-                        except Exception as ex:
-                            print(
-                                f"      OCR failed for a cell in Table Block #{t_idx + 1} "
-                                f"({ex})."
-                            )
-                            cell_string = ""
-
-                        detected_cells.append(
-                            {
-                                "x": x_center,
-                                "y": y_center,
-                                "text": cell_string,
-                                "height": cell_height,
-                            }
-                        )
-
-                    if not detected_cells:
+                    if not row_boxes or not col_boxes:
                         continue
 
-                    # 3. Reconstruct extracted array into spatial table row assignments
-                    detected_cells.sort(key=lambda c: c["y"])
-                    median_height = np.median([c["height"] for c in detected_cells])
-                    y_tolerance = max(4.0, median_height * 0.45)
+                    # Sort rows top-to-bottom, columns left-to-right
+                    row_boxes.sort(key=lambda b: (b[1] + b[3]) / 2)
+                    col_boxes.sort(key=lambda b: (b[0] + b[2]) / 2)
 
-                    rows: list[list[DetectedCell]] = []
-                    current_row = [detected_cells[0]]
-                    current_row_y = detected_cells[0]["y"]
-
-                    for cell in detected_cells[1:]:
-                        if abs(cell["y"] - current_row_y) <= y_tolerance:
-                            current_row.append(cell)
-                            current_row_y = float(np.mean([c["y"] for c in current_row]))
-                        else:
-                            current_row.sort(key=lambda c: c["x"])
-                            rows.append(current_row)
-                            current_row = [cell]
-                            current_row_y = cell["y"]
-                    current_row.sort(key=lambda c: c["x"])
-                    rows.append(current_row)
-
-                    # Normalize alignment array constraints into standard grid shapes
-                    max_cols = max(len(r) for r in rows)
+                    # Build the grid by OCR-ing each row × column intersection
                     matrix_grid: list[list[str]] = []
-                    for r in rows:
-                        row_strings = [cell["text"] for cell in r]
-                        while len(row_strings) < max_cols:
-                            row_strings.append("")
+                    for rbox in row_boxes:
+                        row_strings: list[str] = []
+                        for cbox in col_boxes:
+                            x0 = max(rbox[0], cbox[0])
+                            y0 = max(rbox[1], cbox[1])
+                            x1 = min(rbox[2], cbox[2])
+                            y1 = min(rbox[3], cbox[3])
+                            if x1 <= x0 or y1 <= y0:
+                                row_strings.append("")
+                                continue
+                            cell_crop = _crop_image(cropped_table_img, [x0, y0, x1, y1])
+                            try:
+                                cell_string = self._ocr_cell_text(cell_crop)
+                            except Exception as ex:
+                                print(
+                                    f"      OCR failed for a cell in Table Block #{t_idx + 1} "
+                                    f"({ex})."
+                                )
+                                cell_string = ""
+                            row_strings.append(cell_string)
                         matrix_grid.append(row_strings)
 
                     # Create final presentation Pandas Dataframe container
