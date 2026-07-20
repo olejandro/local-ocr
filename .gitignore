@@ -1,5 +1,7 @@
 # ignore virtual environment
 .venv/
+# ignore any pycache files
+__pycache__/
 # ignore any zip files
 *.zip
 # ignore any folder starting with "local"
