@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Sequence, TypedDict, cast
 
 import torch
+import numpy as np
 import pandas as pd
 from pypdf import PdfReader
 from transformers import AutoImageProcessor, AutoModelForObjectDetection, TrOCRProcessor, VisionEncoderDecoderModel
@@ -20,6 +21,13 @@ DEFAULT_TROCR_MODEL_DIR = DEFAULT_MODEL_BASE_DIR / "trocr_base_printed_local"
 ModelPath = str | os.PathLike[str]
 
 
+class DetectedCell(TypedDict):
+    x: float
+    y: float
+    text: str
+    height: float
+
+
 class ExtractedTable(TypedDict):
     page: int
     table_on_page: int
@@ -28,24 +36,6 @@ class ExtractedTable(TypedDict):
 
 def _load_image_processor(model_path: ModelPath) -> Any:
     return AutoImageProcessor.from_pretrained(model_path, local_files_only=True)  # type: ignore[reportUnknownMemberType]
-
-
-def _processor_call(processor: Any, image: Image.Image) -> Any:
-    """Call an image processor, working around transformers < 4.37 not accepting
-    a size dict with only 'longest_edge'.  In newer transformers that format means
-    "scale so the longest edge equals N" (upscale or downscale).  We replicate
-    that behaviour explicitly and then tell the processor to skip its own resize."""
-    size = getattr(processor, "size", None)
-    if isinstance(size, dict) and "longest_edge" in size and "shortest_edge" not in size:
-        longest_edge = size["longest_edge"]
-        img_w, img_h = image.size  # PIL: (width, height)
-        scale = longest_edge / max(img_w, img_h)
-        if scale != 1.0:
-            new_w = max(1, round(img_w * scale))
-            new_h = max(1, round(img_h * scale))
-            image = image.resize((new_w, new_h), Image.BILINEAR)
-        return processor(images=image, return_tensors="pt", do_resize=False)
-    return processor(images=image, return_tensors="pt")
 
 
 def _load_object_detection_model(model_path: ModelPath) -> Any:
@@ -129,13 +119,6 @@ class OfflineTableExtractorPipeline:
         decoded = _decode_text(self.ocr_processor, generated_ids)
         text = decoded[0] if decoded else ""
         return text.strip()
-
-    @staticmethod
-    def _vertical_overlap_ratio(box_a: list[int], box_b: list[int]) -> float:
-        """Return the fraction of the shorter box's height that overlaps vertically."""
-        overlap = max(0, min(box_a[3], box_b[3]) - max(box_a[1], box_b[1]))
-        shorter = min(box_a[3] - box_a[1], box_b[3] - box_b[1])
-        return overlap / shorter if shorter > 0 else 0.0
 
     @staticmethod
     def _clip_box(box: Sequence[float], width: int, height: int) -> list[int] | None:
@@ -226,7 +209,7 @@ class OfflineTableExtractorPipeline:
                 # STAGE 1: LOCATE MACRO TABLES ON THE PAGE IMAGE
                 # ==========================================
                 try:
-                    detect_inputs = _processor_call(self.detect_processor, full_page_image)
+                    detect_inputs = self.detect_processor(images=full_page_image, return_tensors="pt")
                     with torch.no_grad():
                         detect_outputs = self.detect_model(**detect_inputs)
                 except Exception as ex:
@@ -266,7 +249,7 @@ class OfflineTableExtractorPipeline:
                     # STAGE 2: PARSE THE INTERNAL TABLE CELLS
                     # ==========================================
                     try:
-                        struct_inputs = _processor_call(self.struct_processor, cropped_table_img)
+                        struct_inputs = self.struct_processor(images=cropped_table_img, return_tensors="pt")
                         with torch.no_grad():
                             struct_outputs = self.struct_model(**struct_inputs)
                     except Exception as ex:
@@ -282,74 +265,71 @@ class OfflineTableExtractorPipeline:
                         struct_outputs, threshold=cell_threshold, target_sizes=struct_sizes
                     )[0]
 
-                    # 3. Collect row boxes from the structure model.
-                    #    Label 3 = table column header (always a row).
-                    #    Label 2 = table row (skip any that duplicate a label-3 region).
-                    #    The model often tags the header area with both labels, so we
-                    #    give label-3 precedence and drop overlapping label-2 boxes to
-                    #    avoid producing a duplicate header row.
-                    #    Label 1 = table column.
-                    header_boxes: list[list[int]] = []
-                    data_row_boxes: list[list[int]] = []
-                    col_boxes: list[list[int]] = []
+                    detected_cells: list[DetectedCell] = []
                     for label, box in zip(struct_results["labels"], struct_results["boxes"]):
-                        lv = label.item()
-                        if lv == 3:  # table column header
-                            clipped = self._clip_box(box.tolist(), c_width, c_height)
-                            if clipped is not None:
-                                header_boxes.append(clipped)
-                        elif lv == 2:  # table row
-                            clipped = self._clip_box(box.tolist(), c_width, c_height)
-                            if clipped is not None:
-                                data_row_boxes.append(clipped)
-                        elif lv == 1:  # table column
-                            clipped = self._clip_box(box.tolist(), c_width, c_height)
-                            if clipped is not None:
-                                col_boxes.append(clipped)
+                        if label.item() != 4:  # Label 4 = Individual Table Cells
+                            continue
 
-                    # Drop label-2 rows that substantially overlap a label-3 header row
-                    # to prevent the header from appearing twice in the output grid.
-                    if header_boxes:
-                        filtered_data_rows = [
-                            rb for rb in data_row_boxes
-                            if not any(
-                                self._vertical_overlap_ratio(rb, hb) > 0.5
-                                for hb in header_boxes
+                        box_coords = self._clip_box(box.tolist(), c_width, c_height)
+                        if box_coords is None:
+                            continue
+
+                        # Compute geometric properties relative to cropped table window
+                        x_center = (box_coords[0] + box_coords[2]) / 2
+                        y_center = (box_coords[1] + box_coords[3]) / 2
+                        cell_height = box_coords[3] - box_coords[1]
+
+                        # Isolate text elements inside cell via local TrOCR execution
+                        cell_crop = _crop_image(cropped_table_img, box_coords)
+                        try:
+                            cell_string = self._ocr_cell_text(cell_crop)
+                        except Exception as ex:
+                            print(
+                                f"      OCR failed for a cell in Table Block #{t_idx + 1} "
+                                f"({ex})."
                             )
-                        ]
-                    else:
-                        filtered_data_rows = data_row_boxes
-                    row_boxes = header_boxes + filtered_data_rows
+                            cell_string = ""
 
-                    if not row_boxes or not col_boxes:
+                        detected_cells.append(
+                            {
+                                "x": x_center,
+                                "y": y_center,
+                                "text": cell_string,
+                                "height": cell_height,
+                            }
+                        )
+
+                    if not detected_cells:
                         continue
 
-                    # Sort rows top-to-bottom, columns left-to-right
-                    row_boxes.sort(key=lambda b: (b[1] + b[3]) / 2)
-                    col_boxes.sort(key=lambda b: (b[0] + b[2]) / 2)
+                    # 3. Reconstruct extracted array into spatial table row assignments
+                    detected_cells.sort(key=lambda c: c["y"])
+                    median_height = np.median([c["height"] for c in detected_cells])
+                    y_tolerance = max(4.0, median_height * 0.45)
 
-                    # Build the grid by OCR-ing each row × column intersection
+                    rows: list[list[DetectedCell]] = []
+                    current_row = [detected_cells[0]]
+                    current_row_y = detected_cells[0]["y"]
+
+                    for cell in detected_cells[1:]:
+                        if abs(cell["y"] - current_row_y) <= y_tolerance:
+                            current_row.append(cell)
+                            current_row_y = float(np.mean([c["y"] for c in current_row]))
+                        else:
+                            current_row.sort(key=lambda c: c["x"])
+                            rows.append(current_row)
+                            current_row = [cell]
+                            current_row_y = cell["y"]
+                    current_row.sort(key=lambda c: c["x"])
+                    rows.append(current_row)
+
+                    # Normalize alignment array constraints into standard grid shapes
+                    max_cols = max(len(r) for r in rows)
                     matrix_grid: list[list[str]] = []
-                    for rbox in row_boxes:
-                        row_strings: list[str] = []
-                        for cbox in col_boxes:
-                            x0 = max(rbox[0], cbox[0])
-                            y0 = max(rbox[1], cbox[1])
-                            x1 = min(rbox[2], cbox[2])
-                            y1 = min(rbox[3], cbox[3])
-                            if x1 <= x0 or y1 <= y0:
-                                row_strings.append("")
-                                continue
-                            cell_crop = _crop_image(cropped_table_img, [x0, y0, x1, y1])
-                            try:
-                                cell_string = self._ocr_cell_text(cell_crop)
-                            except Exception as ex:
-                                print(
-                                    f"      OCR failed for a cell in Table Block #{t_idx + 1} "
-                                    f"({ex})."
-                                )
-                                cell_string = ""
-                            row_strings.append(cell_string)
+                    for r in rows:
+                        row_strings = [cell["text"] for cell in r]
+                        while len(row_strings) < max_cols:
+                            row_strings.append("")
                         matrix_grid.append(row_strings)
 
                     # Create final presentation Pandas Dataframe container

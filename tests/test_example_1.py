@@ -209,16 +209,16 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         pipeline.struct_processor = _FakeProcessor(
             {
                 "labels": [
-                    _TensorScalar(2),  # table row 1
-                    _TensorScalar(2),  # table row 2
-                    _TensorScalar(1),  # table column 1
-                    _TensorScalar(1),  # table column 2
+                    _TensorScalar(4),
+                    _TensorScalar(4),
+                    _TensorScalar(4),
+                    _TensorScalar(4),
                 ],
                 "boxes": [
-                    _TensorBox([0, 0, 90, 10]),   # row 1: full width, top band
-                    _TensorBox([0, 20, 90, 30]),  # row 2: full width, bottom band
-                    _TensorBox([0, 0, 40, 30]),   # column 1: full height, left half
-                    _TensorBox([50, 0, 90, 30]),  # column 2: full height, right half
+                    _TensorBox([0, 0, 40, 10]),
+                    _TensorBox([50, 0, 90, 10]),
+                    _TensorBox([0, 20, 40, 30]),
+                    _TensorBox([50, 20, 90, 30]),
                 ],
             }
         )
@@ -243,100 +243,6 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         self.assertEqual(results[0]["page"], 1)
         self.assertEqual(results[0]["table_on_page"], 1)
         self.assertEqual(results[0]["dataframe"].data, [["A1", "B1"], ["A2", "B2"]])
-
-    def test_extract_tables_includes_column_header_row(self):
-        """Label 3 (table column header) must be treated as a row."""
-        pipeline = self._create_test_pipeline()
-        pipeline.detect_processor = _FakeProcessor(
-            {
-                "labels": [_TensorScalar(0)],
-                "boxes": [_TensorBox([0, 0, 100, 60])],
-            }
-        )
-        pipeline.struct_processor = _FakeProcessor(
-            {
-                "labels": [
-                    _TensorScalar(3),  # table column header (row 1)
-                    _TensorScalar(2),  # table row 2
-                    _TensorScalar(1),  # table column 1
-                    _TensorScalar(1),  # table column 2
-                ],
-                "boxes": [
-                    _TensorBox([0, 0, 90, 10]),   # header row: top band
-                    _TensorBox([0, 20, 90, 30]),  # data row: bottom band
-                    _TensorBox([0, 0, 40, 30]),   # column 1: left half
-                    _TensorBox([50, 0, 90, 30]),  # column 2: right half
-                ],
-            }
-        )
-
-        pipeline._ocr_cell_text = mock.Mock(side_effect=["H1", "H2", "D1", "D2"])
-
-        with (
-            tempfile.NamedTemporaryFile(suffix=".pdf") as f,
-            mock.patch.object(
-                self.example_1,
-                "PdfReader",
-                return_value=types.SimpleNamespace(
-                    pages=[_FakePage(images=[_FakeEmbeddedImage(data=b"ok")])]
-                ),
-            ),
-            mock.patch.object(self.example_1, "_open_rgb_image", return_value=_FakeImage()),
-            mock.patch.object(self.example_1, "_crop_image", return_value=_FakeImage(width=100, height=50)),
-        ):
-            results = pipeline.extract_tables_from_pdf(f.name, promote_header=False)
-
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["dataframe"].data, [["H1", "H2"], ["D1", "D2"]])
-
-    def test_extract_tables_filters_duplicate_header_rows(self):
-        """A label-2 row that overlaps the label-3 header must not produce a duplicate row."""
-        pipeline = self._create_test_pipeline()
-        pipeline.detect_processor = _FakeProcessor(
-            {
-                "labels": [_TensorScalar(0)],
-                "boxes": [_TensorBox([0, 0, 100, 60])],
-            }
-        )
-        # The header region is tagged with BOTH label 3 AND label 2 (same box).
-        pipeline.struct_processor = _FakeProcessor(
-            {
-                "labels": [
-                    _TensorScalar(3),  # table column header
-                    _TensorScalar(2),  # duplicate label-2 for the same header area
-                    _TensorScalar(2),  # separate data row
-                    _TensorScalar(1),  # table column 1
-                    _TensorScalar(1),  # table column 2
-                ],
-                "boxes": [
-                    _TensorBox([0, 0, 90, 10]),   # header (label 3)
-                    _TensorBox([0, 0, 90, 10]),   # duplicate of header (label 2, same coords)
-                    _TensorBox([0, 20, 90, 30]),  # data row (label 2)
-                    _TensorBox([0, 0, 40, 30]),   # column 1
-                    _TensorBox([50, 0, 90, 30]),  # column 2
-                ],
-            }
-        )
-
-        pipeline._ocr_cell_text = mock.Mock(side_effect=["H1", "H2", "D1", "D2"])
-
-        with (
-            tempfile.NamedTemporaryFile(suffix=".pdf") as f,
-            mock.patch.object(
-                self.example_1,
-                "PdfReader",
-                return_value=types.SimpleNamespace(
-                    pages=[_FakePage(images=[_FakeEmbeddedImage(data=b"ok")])]
-                ),
-            ),
-            mock.patch.object(self.example_1, "_open_rgb_image", return_value=_FakeImage()),
-            mock.patch.object(self.example_1, "_crop_image", return_value=_FakeImage(width=100, height=50)),
-        ):
-            results = pipeline.extract_tables_from_pdf(f.name, promote_header=False)
-
-        # Should be exactly 2 rows (header + 1 data), not 3 (header + duplicate + data)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["dataframe"].data, [["H1", "H2"], ["D1", "D2"]])
 
 
 class TableExtractionRegressionTests(unittest.TestCase):
