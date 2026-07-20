@@ -289,7 +289,7 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["dataframe"].data, [["H1", "H2"], ["D1", "D2"]])
 
-    def test_extract_tables_deduplicates_overlapping_header_and_row(self):
+    def test_extract_tables_filters_duplicate_header_rows(self):
         """A label-2 row that overlaps the label-3 header must not produce a duplicate row."""
         pipeline = self._create_test_pipeline()
         pipeline.detect_processor = _FakeProcessor(

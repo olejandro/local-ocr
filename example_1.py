@@ -309,13 +309,16 @@ class OfflineTableExtractorPipeline:
 
                     # Drop label-2 rows that substantially overlap a label-3 header row
                     # to prevent the header from appearing twice in the output grid.
-                    filtered_data_rows = [
-                        rb for rb in data_row_boxes
-                        if not any(
-                            self._vertical_overlap_ratio(rb, hb) > 0.5
-                            for hb in header_boxes
-                        )
-                    ]
+                    if header_boxes:
+                        filtered_data_rows = [
+                            rb for rb in data_row_boxes
+                            if not any(
+                                self._vertical_overlap_ratio(rb, hb) > 0.5
+                                for hb in header_boxes
+                            )
+                        ]
+                    else:
+                        filtered_data_rows = data_row_boxes
                     row_boxes = header_boxes + filtered_data_rows
 
                     if not row_boxes or not col_boxes:
