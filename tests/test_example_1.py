@@ -244,6 +244,51 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         self.assertEqual(results[0]["table_on_page"], 1)
         self.assertEqual(results[0]["dataframe"].data, [["A1", "B1"], ["A2", "B2"]])
 
+    def test_extract_tables_includes_column_header_row(self):
+        """Label 3 (table column header) must be treated as a row."""
+        pipeline = self._create_test_pipeline()
+        pipeline.detect_processor = _FakeProcessor(
+            {
+                "labels": [_TensorScalar(0)],
+                "boxes": [_TensorBox([0, 0, 100, 60])],
+            }
+        )
+        pipeline.struct_processor = _FakeProcessor(
+            {
+                "labels": [
+                    _TensorScalar(3),  # table column header (row 1)
+                    _TensorScalar(2),  # table row 2
+                    _TensorScalar(1),  # table column 1
+                    _TensorScalar(1),  # table column 2
+                ],
+                "boxes": [
+                    _TensorBox([0, 0, 90, 10]),   # header row: top band
+                    _TensorBox([0, 20, 90, 30]),  # data row: bottom band
+                    _TensorBox([0, 0, 40, 30]),   # column 1: left half
+                    _TensorBox([50, 0, 90, 30]),  # column 2: right half
+                ],
+            }
+        )
+
+        pipeline._ocr_cell_text = mock.Mock(side_effect=["H1", "H2", "D1", "D2"])
+
+        with (
+            tempfile.NamedTemporaryFile(suffix=".pdf") as f,
+            mock.patch.object(
+                self.example_1,
+                "PdfReader",
+                return_value=types.SimpleNamespace(
+                    pages=[_FakePage(images=[_FakeEmbeddedImage(data=b"ok")])]
+                ),
+            ),
+            mock.patch.object(self.example_1, "_open_rgb_image", return_value=_FakeImage()),
+            mock.patch.object(self.example_1, "_crop_image", return_value=_FakeImage(width=100, height=50)),
+        ):
+            results = pipeline.extract_tables_from_pdf(f.name, promote_header=False)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["dataframe"].data, [["H1", "H2"], ["D1", "D2"]])
+
 
 class TableExtractionRegressionTests(unittest.TestCase):
     _REQUIRED_DEPENDENCY_MODULES = ("torch", "numpy", "pandas", "pypdf", "transformers", "PIL")

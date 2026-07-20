@@ -275,14 +275,15 @@ class OfflineTableExtractorPipeline:
                         struct_outputs, threshold=cell_threshold, target_sizes=struct_sizes
                     )[0]
 
-                    # 3. Collect row (label 2) and column (label 1) boxes from the
-                    #    structure model.  Individual cells are the intersections of
-                    #    each row box with each column box.
+                    # 3. Collect row (labels 2 and 3) and column (label 1) boxes from
+                    #    the structure model.  Label 2 = table row, label 3 = table
+                    #    column header (also a row).  Individual cells are the
+                    #    intersections of each row box with each column box.
                     row_boxes: list[list[int]] = []
                     col_boxes: list[list[int]] = []
                     for label, box in zip(struct_results["labels"], struct_results["boxes"]):
                         lv = label.item()
-                        if lv == 2:  # table row
+                        if lv in (2, 3):  # table row or table column header
                             clipped = self._clip_box(box.tolist(), c_width, c_height)
                             if clipped is not None:
                                 row_boxes.append(clipped)
