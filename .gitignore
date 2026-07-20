@@ -6,5 +6,6 @@ __pycache__/
 *.zip
 # ignore any folder starting with "local"
 local_models/
-# ignore any pdf files
+# ignore any pdf files except for those in "tests" folder
 *.pdf
+!tests/*.pdf
