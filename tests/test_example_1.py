@@ -248,7 +248,13 @@ class TT01PdfRegressionTests(unittest.TestCase):
     def _normalize_rows(rows):
         normalized_rows = []
         for row in rows:
-            normalized_rows.append([str(cell).strip() for cell in row])
+            normalized_row = []
+            for cell in row:
+                if cell is None or cell != cell:
+                    normalized_row.append("")
+                else:
+                    normalized_row.append(str(cell).strip())
+            normalized_rows.append(normalized_row)
         return normalized_rows
 
     def _assert_rows_equal(self, actual_rows, expected_rows):
@@ -305,7 +311,7 @@ class TT01PdfRegressionTests(unittest.TestCase):
         self.assertGreater(len(results), 0, "No tables were extracted from tests/tt-01.pdf")
 
         dataframe = results[0]["dataframe"]
-        dataframe_rows = dataframe.fillna("").values.tolist()
+        dataframe_rows = dataframe.values.tolist()
         actual_rows = self._normalize_rows(dataframe_rows)
         with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
             expected_rows = self._normalize_rows(csv.reader(f))
