@@ -312,6 +312,7 @@ class TableExtractionRegressionTests(unittest.TestCase):
         ).resolve()
 
         if os.environ.get(self._BOOTSTRAP_ENV) == "1":
+            # CI can opt in to model downloads by setting LOCAL_OCR_BOOTSTRAP_MODELS=1.
             model_bootstrap = importlib.import_module("model_bootstrap")
             detect_model_dir, struct_model_dir, ocr_model_dir = model_bootstrap.ensure_required_models(
                 model_root
@@ -323,12 +324,11 @@ class TableExtractionRegressionTests(unittest.TestCase):
 
         missing_model_dirs = []
         for path in (detect_model_dir, struct_model_dir, ocr_model_dir):
-            if path.exists():
-                continue
-            try:
-                missing_model_dirs.append(str(path.relative_to(repo_root)))
-            except ValueError:
-                missing_model_dirs.append(str(path))
+            if not path.exists():
+                try:
+                    missing_model_dirs.append(str(path.relative_to(repo_root)))
+                except ValueError:
+                    missing_model_dirs.append(str(path))
         if missing_model_dirs:
             self.skipTest(f"Missing local model directories: {', '.join(missing_model_dirs)}")
 
