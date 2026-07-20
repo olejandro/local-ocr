@@ -131,6 +131,13 @@ class OfflineTableExtractorPipeline:
         return text.strip()
 
     @staticmethod
+    def _vertical_overlap_ratio(box_a: list[int], box_b: list[int]) -> float:
+        """Return the fraction of the shorter box's height that overlaps vertically."""
+        overlap = max(0, min(box_a[3], box_b[3]) - max(box_a[1], box_b[1]))
+        shorter = min(box_a[3] - box_a[1], box_b[3] - box_b[1])
+        return overlap / shorter if shorter > 0 else 0.0
+
+    @staticmethod
     def _clip_box(box: Sequence[float], width: int, height: int) -> list[int] | None:
         """Clamp a predicted box into image bounds and reject zero-area boxes."""
         x0, y0, x1, y1 = [int(round(v)) for v in box]
@@ -275,22 +282,41 @@ class OfflineTableExtractorPipeline:
                         struct_outputs, threshold=cell_threshold, target_sizes=struct_sizes
                     )[0]
 
-                    # 3. Collect row (labels 2 and 3) and column (label 1) boxes from
-                    #    the structure model.  Label 2 = table row, label 3 = table
-                    #    column header (also a row).  Individual cells are the
-                    #    intersections of each row box with each column box.
-                    row_boxes: list[list[int]] = []
+                    # 3. Collect row boxes from the structure model.
+                    #    Label 3 = table column header (always a row).
+                    #    Label 2 = table row (skip any that duplicate a label-3 region).
+                    #    The model often tags the header area with both labels, so we
+                    #    give label-3 precedence and drop overlapping label-2 boxes to
+                    #    avoid producing a duplicate header row.
+                    #    Label 1 = table column.
+                    header_boxes: list[list[int]] = []
+                    data_row_boxes: list[list[int]] = []
                     col_boxes: list[list[int]] = []
                     for label, box in zip(struct_results["labels"], struct_results["boxes"]):
                         lv = label.item()
-                        if lv in (2, 3):  # table row or table column header
+                        if lv == 3:  # table column header
                             clipped = self._clip_box(box.tolist(), c_width, c_height)
                             if clipped is not None:
-                                row_boxes.append(clipped)
+                                header_boxes.append(clipped)
+                        elif lv == 2:  # table row
+                            clipped = self._clip_box(box.tolist(), c_width, c_height)
+                            if clipped is not None:
+                                data_row_boxes.append(clipped)
                         elif lv == 1:  # table column
                             clipped = self._clip_box(box.tolist(), c_width, c_height)
                             if clipped is not None:
                                 col_boxes.append(clipped)
+
+                    # Drop label-2 rows that substantially overlap a label-3 header row
+                    # to prevent the header from appearing twice in the output grid.
+                    filtered_data_rows = [
+                        rb for rb in data_row_boxes
+                        if not any(
+                            self._vertical_overlap_ratio(rb, hb) > 0.5
+                            for hb in header_boxes
+                        )
+                    ]
+                    row_boxes = header_boxes + filtered_data_rows
 
                     if not row_boxes or not col_boxes:
                         continue

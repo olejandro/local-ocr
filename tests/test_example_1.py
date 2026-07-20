@@ -289,6 +289,55 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["dataframe"].data, [["H1", "H2"], ["D1", "D2"]])
 
+    def test_extract_tables_deduplicates_overlapping_header_and_row(self):
+        """A label-2 row that overlaps the label-3 header must not produce a duplicate row."""
+        pipeline = self._create_test_pipeline()
+        pipeline.detect_processor = _FakeProcessor(
+            {
+                "labels": [_TensorScalar(0)],
+                "boxes": [_TensorBox([0, 0, 100, 60])],
+            }
+        )
+        # The header region is tagged with BOTH label 3 AND label 2 (same box).
+        pipeline.struct_processor = _FakeProcessor(
+            {
+                "labels": [
+                    _TensorScalar(3),  # table column header
+                    _TensorScalar(2),  # duplicate label-2 for the same header area
+                    _TensorScalar(2),  # separate data row
+                    _TensorScalar(1),  # table column 1
+                    _TensorScalar(1),  # table column 2
+                ],
+                "boxes": [
+                    _TensorBox([0, 0, 90, 10]),   # header (label 3)
+                    _TensorBox([0, 0, 90, 10]),   # duplicate of header (label 2, same coords)
+                    _TensorBox([0, 20, 90, 30]),  # data row (label 2)
+                    _TensorBox([0, 0, 40, 30]),   # column 1
+                    _TensorBox([50, 0, 90, 30]),  # column 2
+                ],
+            }
+        )
+
+        pipeline._ocr_cell_text = mock.Mock(side_effect=["H1", "H2", "D1", "D2"])
+
+        with (
+            tempfile.NamedTemporaryFile(suffix=".pdf") as f,
+            mock.patch.object(
+                self.example_1,
+                "PdfReader",
+                return_value=types.SimpleNamespace(
+                    pages=[_FakePage(images=[_FakeEmbeddedImage(data=b"ok")])]
+                ),
+            ),
+            mock.patch.object(self.example_1, "_open_rgb_image", return_value=_FakeImage()),
+            mock.patch.object(self.example_1, "_crop_image", return_value=_FakeImage(width=100, height=50)),
+        ):
+            results = pipeline.extract_tables_from_pdf(f.name, promote_header=False)
+
+        # Should be exactly 2 rows (header + 1 data), not 3 (header + duplicate + data)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["dataframe"].data, [["H1", "H2"], ["D1", "D2"]])
+
 
 class TableExtractionRegressionTests(unittest.TestCase):
     _REQUIRED_DEPENDENCY_MODULES = ("torch", "numpy", "pandas", "pypdf", "transformers", "PIL")
