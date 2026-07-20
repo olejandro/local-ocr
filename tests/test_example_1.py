@@ -244,7 +244,7 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         self.assertEqual(results[0]["dataframe"].data, [["A1", "B1"], ["A2", "B2"]])
 
 
-class TT01PdfRegressionTests(unittest.TestCase):
+class TableExtractionRegressionTests(unittest.TestCase):
     REQUIRED_MODULES = ("torch", "numpy", "pandas", "pypdf", "transformers", "PIL")
 
     @staticmethod
@@ -277,7 +277,7 @@ class TT01PdfRegressionTests(unittest.TestCase):
                     f"Mismatch at row {row_index}, column {col_index}",
                 )
 
-    def test_tt01_pdf_matches_expected_csv(self):
+    def test_table_extraction_matches_expected_csv(self):
         repo_root = Path(__file__).resolve().parents[1]
         pdf_path = repo_root / "tests" / "tt-01.pdf"
         csv_path = repo_root / "tests" / "tt-01.csv"
