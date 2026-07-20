@@ -284,6 +284,8 @@ class TT01PdfRegressionTests(unittest.TestCase):
 
         if not pdf_path.exists():
             self.skipTest("Missing tests/tt-01.pdf")
+        if not csv_path.exists():
+            self.skipTest("Missing tests/tt-01.csv")
 
         missing_modules = [mod for mod in self.REQUIRED_MODULES if importlib.util.find_spec(mod) is None]
         if missing_modules:
