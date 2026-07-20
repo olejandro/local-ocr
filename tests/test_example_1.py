@@ -243,6 +243,30 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
 
 
 class TT01PdfRegressionTests(unittest.TestCase):
+    @staticmethod
+    def _normalize_rows(rows):
+        normalized_rows = []
+        for row in rows:
+            normalized_rows.append([str(cell).strip() for cell in row])
+        return normalized_rows
+
+    def _assert_rows_equal(self, actual_rows, expected_rows):
+        self.assertEqual(len(actual_rows), len(expected_rows), "Row count mismatch")
+        for row_index, (actual_row, expected_row) in enumerate(zip(actual_rows, expected_rows), start=1):
+            self.assertEqual(
+                len(actual_row),
+                len(expected_row),
+                f"Column count mismatch at row {row_index}",
+            )
+            for col_index, (actual_cell, expected_cell) in enumerate(
+                zip(actual_row, expected_row), start=1
+            ):
+                self.assertEqual(
+                    actual_cell,
+                    expected_cell,
+                    f"Mismatch at row {row_index}, column {col_index}",
+                )
+
     def test_tt01_pdf_matches_expected_csv(self):
         repo_root = Path(__file__).resolve().parents[1]
         pdf_path = repo_root / "tests" / "tt-01.pdf"
@@ -280,11 +304,12 @@ class TT01PdfRegressionTests(unittest.TestCase):
         self.assertGreater(len(results), 0, "No tables were extracted from tests/tt-01.pdf")
 
         dataframe = results[0]["dataframe"]
-        actual_rows = [[str(cell).strip() for cell in row] for row in dataframe.fillna("").values.tolist()]
+        dataframe_rows = dataframe.fillna("").values.tolist()
+        actual_rows = self._normalize_rows(dataframe_rows)
         with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-            expected_rows = [[cell.strip() for cell in row] for row in csv.reader(f)]
+            expected_rows = self._normalize_rows(csv.reader(f))
 
-        self.assertEqual(actual_rows, expected_rows)
+        self._assert_rows_equal(actual_rows, expected_rows)
 
 
 if __name__ == "__main__":
