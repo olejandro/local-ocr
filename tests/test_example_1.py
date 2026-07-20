@@ -1,9 +1,14 @@
 import importlib
+import importlib.util
+import csv
+import math
+import os
 import sys
 import tempfile
 import types
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from unittest import mock
 
 
@@ -238,6 +243,118 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         self.assertEqual(results[0]["page"], 1)
         self.assertEqual(results[0]["table_on_page"], 1)
         self.assertEqual(results[0]["dataframe"].data, [["A1", "B1"], ["A2", "B2"]])
+
+
+class TableExtractionRegressionTests(unittest.TestCase):
+    _REQUIRED_DEPENDENCY_MODULES = ("torch", "numpy", "pandas", "pypdf", "transformers", "PIL")
+    _BOOTSTRAP_ENV = "LOCAL_OCR_BOOTSTRAP_MODELS"
+    _MODEL_BASE_DIR_ENV = "LOCAL_OCR_MODEL_BASE_DIR"
+    _TRUE_VALUES = {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _normalize_rows(rows):
+        try:
+            pandas_module = importlib.import_module("pandas")
+        except ImportError:
+            pandas_module = None
+
+        normalized_rows = []
+        for row in rows:
+            normalized_row = []
+            for cell in row:
+                if cell is None or (
+                    pandas_module is not None and bool(pandas_module.isna(cell))
+                ) or (isinstance(cell, float) and math.isnan(cell)):
+                    normalized_row.append("")
+                else:
+                    normalized_row.append(str(cell).strip())
+            normalized_rows.append(normalized_row)
+        return normalized_rows
+
+    def _assert_rows_equal(self, actual_rows, expected_rows):
+        self.assertEqual(len(actual_rows), len(expected_rows), "Row count mismatch")
+        for row_index, (actual_row, expected_row) in enumerate(zip(actual_rows, expected_rows), start=1):
+            self.assertEqual(
+                len(actual_row),
+                len(expected_row),
+                f"Column count mismatch at row {row_index}",
+            )
+            for col_index, (actual_cell, expected_cell) in enumerate(
+                zip(actual_row, expected_row), start=1
+            ):
+                self.assertEqual(
+                    actual_cell,
+                    expected_cell,
+                    f"Mismatch at row {row_index}, column {col_index}",
+                )
+
+    def _env_var_enabled(self, env_name):
+        value = os.environ.get(env_name)
+        if value is None:
+            return False
+        return value.strip().lower() in self._TRUE_VALUES
+
+    def test_table_extraction_matches_expected_csv(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        pdf_path = repo_root / "tests" / "tt-01.pdf"
+        csv_path = repo_root / "tests" / "tt-01.csv"
+
+        if not pdf_path.exists():
+            self.skipTest("Missing tests/tt-01.pdf")
+        if not csv_path.exists():
+            self.skipTest("Missing tests/tt-01.csv")
+
+        missing_modules = [
+            mod for mod in self._REQUIRED_DEPENDENCY_MODULES if importlib.util.find_spec(mod) is None
+        ]
+        if missing_modules:
+            self.skipTest(f"Missing required dependencies: {', '.join(missing_modules)}")
+
+        try:
+            example_1 = importlib.import_module("example_1")
+        except ImportError as ex:
+            self.skipTest(f"Failed to import example_1: {ex}")
+        model_root = Path(
+            os.environ.get(self._MODEL_BASE_DIR_ENV, str(repo_root / "local_models"))
+        ).resolve()
+
+        if self._env_var_enabled(self._BOOTSTRAP_ENV):
+            # CI can opt in to model downloads by setting LOCAL_OCR_BOOTSTRAP_MODELS=1.
+            model_bootstrap = importlib.import_module("model_bootstrap")
+            detect_model_dir, struct_model_dir, ocr_model_dir = model_bootstrap.ensure_required_models(
+                model_root
+            )
+        else:
+            detect_model_dir = model_root / "table_transformer_detection_local"
+            struct_model_dir = model_root / "table_transformer_structure_local"
+            ocr_model_dir = model_root / "trocr_base_printed_local"
+
+        missing_model_dirs = []
+        for path in (detect_model_dir, struct_model_dir, ocr_model_dir):
+            if not path.exists():
+                try:
+                    missing_model_dirs.append(str(path.relative_to(repo_root)))
+                except ValueError:
+                    missing_model_dirs.append(str(path))
+        if missing_model_dirs:
+            self.skipTest(f"Missing local model directories: {', '.join(missing_model_dirs)}")
+
+        pipeline = example_1.OfflineTableExtractorPipeline(
+            detect_model_dir,
+            struct_model_dir,
+            ocr_model_dir,
+        )
+        results = pipeline.extract_tables_from_pdf(pdf_path, promote_header=False)
+
+        self.assertGreater(len(results), 0, "No tables were extracted from tests/tt-01.pdf")
+
+        dataframe = results[0]["dataframe"]
+        dataframe_rows = dataframe.values.tolist()
+        actual_rows = self._normalize_rows(dataframe_rows)
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+            expected_rows = self._normalize_rows(list(csv.reader(f)))
+
+        self._assert_rows_equal(actual_rows, expected_rows)
 
 
 if __name__ == "__main__":
