@@ -4,7 +4,6 @@ import tempfile
 import types
 import unittest
 from contextlib import contextmanager
-from pathlib import Path
 from unittest import mock
 
 
@@ -142,13 +141,10 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
             },
         )
         cls._module_patcher.start()
+        cls.addClassCleanup(cls._module_patcher.stop)
+        cls.addClassCleanup(sys.modules.pop, "example_1", None)
         sys.modules.pop("example_1", None)
         cls.example_1 = importlib.import_module("example_1")
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._module_patcher.stop()
-        sys.modules.pop("example_1", None)
 
     def _create_test_pipeline(self):
         pipeline = object.__new__(self.example_1.OfflineTableExtractorPipeline)
@@ -190,10 +186,11 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
                 self.example_1,
                 "_open_rgb_image",
                 side_effect=ValueError("cannot decode image"),
-            ),
+            ) as mock_open,
         ):
             results = pipeline.extract_tables_from_pdf(f.name)
 
+        mock_open.assert_called_once()
         self.assertEqual(results, [])
 
     def test_extract_tables_builds_matrix_from_detected_cells(self):
