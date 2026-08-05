@@ -368,7 +368,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cell-threshold",
         type=float,
-        default=0.6,
+        default=0.3,
         help="Confidence threshold for stage-2 cell detection.",
     )
     parser.add_argument(

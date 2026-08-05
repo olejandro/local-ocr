@@ -209,16 +209,16 @@ class OfflineTableExtractorPipelineTests(unittest.TestCase):
         pipeline.struct_processor = _FakeProcessor(
             {
                 "labels": [
-                    _TensorScalar(4),
-                    _TensorScalar(4),
-                    _TensorScalar(4),
-                    _TensorScalar(4),
+                    _TensorScalar(1),  # table column
+                    _TensorScalar(1),  # table column
+                    _TensorScalar(2),  # table row
+                    _TensorScalar(2),  # table row
                 ],
                 "boxes": [
-                    _TensorBox([0, 0, 40, 10]),
-                    _TensorBox([50, 0, 90, 10]),
-                    _TensorBox([0, 20, 40, 30]),
-                    _TensorBox([50, 20, 90, 30]),
+                    _TensorBox([0, 0, 40, 50]),
+                    _TensorBox([50, 0, 90, 50]),
+                    _TensorBox([0, 0, 90, 10]),
+                    _TensorBox([0, 20, 90, 30]),
                 ],
             }
         )
